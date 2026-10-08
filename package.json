@@ -1,0 +1,14 @@
+{
+  "name": "crategeneratorlicense-admin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate-license-keys": "tsx scripts/generate-keys.ts"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
+  }
+}
