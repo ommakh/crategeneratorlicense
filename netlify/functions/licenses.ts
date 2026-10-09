@@ -39,17 +39,6 @@ const response = (body: unknown, status = 200) =>
     },
   });
 
-const isAuthorized = (request: Request) => {
-  const expected = process.env.LICENSE_ADMIN_TOKEN;
-  const supplied = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  if (!expected || !supplied) return false;
-
-  const expectedBuffer = Buffer.from(expected);
-  const suppliedBuffer = Buffer.from(supplied);
-  return expectedBuffer.length === suppliedBuffer.length &&
-    crypto.timingSafeEqual(expectedBuffer, suppliedBuffer);
-};
-
 const getSigningKey = () => {
   const value = process.env.LICENSE_PRIVATE_KEY;
   if (!value) throw new Error('LICENSE_PRIVATE_KEY is not configured');
@@ -87,32 +76,12 @@ const publicLicense = ({ signature: _signature, ...license }: License) => licens
 const validText = (value: unknown, maxLength: number): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
 
-const getLicenses = async () => {
-  const store = getStore('license-records');
-  const { blobs } = await store.list({ prefix: 'license-' });
-  const licenses = await Promise.all(
-    blobs.map(({ key }) => store.get(key, { type: 'json' }) as Promise<License | null>),
-  );
-  return licenses
-    .filter((license): license is License => license !== null)
-    .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
-};
-
 export const config = {
-  path: ['/api/licenses', '/api/licenses/generate'],
+  path: '/api/licenses/generate',
 };
 
 export default async (request: Request): Promise<Response> => {
-  if (!isAuthorized(request)) {
-    return response({ error: 'Admin access token is invalid or not configured.' }, 401);
-  }
-
   try {
-    if (request.method === 'GET') {
-      const licenses = await getLicenses();
-      return response({ licenses: licenses.map(publicLicense) });
-    }
-
     if (request.method !== 'POST') {
       return response({ error: 'Method not allowed.' }, 405);
     }
