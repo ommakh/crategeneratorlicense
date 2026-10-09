@@ -40,8 +40,8 @@ const response = (body: unknown, status = 200) =>
   });
 
 const isAuthorized = (request: Request) => {
-  const expected = process.env.LICENSE_ADMIN_TOKEN;
-  const supplied = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+  const expected = process.env.LICENSE_ADMIN_TOKEN?.trim();
+  const supplied = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim();
   if (!expected || !supplied) return false;
 
   const expectedBuffer = Buffer.from(expected);
@@ -103,8 +103,12 @@ export const config = {
 };
 
 export default async (request: Request): Promise<Response> => {
+  if (!process.env.LICENSE_ADMIN_TOKEN?.trim()) {
+    return response({ error: 'LICENSE_ADMIN_TOKEN is not configured on the server. Set it in Netlify and redeploy.' }, 500);
+  }
+
   if (!isAuthorized(request)) {
-    return response({ error: 'Admin access token is invalid or not configured.' }, 401);
+    return response({ error: 'Admin access token is invalid.' }, 401);
   }
 
   try {
