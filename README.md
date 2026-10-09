@@ -1,6 +1,7 @@
 # Crate Generator License
 
-This repository contains a Netlify-hosted web app for generating licenses.
+This repository contains a Netlify-hosted web app for generating licenses and
+listing every saved license by customer name and license number.
 
 ## Deploy to Netlify
 

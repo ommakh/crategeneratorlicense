@@ -87,8 +87,19 @@ const publicLicense = ({ signature: _signature, ...license }: License) => licens
 const validText = (value: unknown, maxLength: number): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
 
+const getLicenses = async () => {
+  const store = getStore('license-records');
+  const { blobs } = await store.list({ prefix: 'license-' });
+  const licenses = await Promise.all(
+    blobs.map(({ key }) => store.get(key, { type: 'json' }) as Promise<License | null>),
+  );
+  return licenses
+    .filter((license): license is License => license !== null)
+    .sort((a, b) => b.issuedAt.localeCompare(a.issuedAt));
+};
+
 export const config = {
-  path: ['/api/licenses/generate', '/api/public-key'],
+  path: ['/api/licenses', '/api/licenses/generate', '/api/public-key'],
 };
 
 export default async (request: Request): Promise<Response> => {
@@ -96,6 +107,11 @@ export default async (request: Request): Promise<Response> => {
     if (new URL(request.url).pathname === '/api/public-key') {
       const publicKey = crypto.createPublicKey(await getSigningKey()).export({ type: 'spki', format: 'pem' }).toString();
       return new Response(publicKey, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+
+    if (request.method === 'GET') {
+      const licenses = await getLicenses();
+      return response({ licenses: licenses.map(publicLicense) });
     }
 
     if (request.method !== 'POST') {
