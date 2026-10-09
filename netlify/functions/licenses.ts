@@ -39,10 +39,21 @@ const response = (body: unknown, status = 200) =>
     },
   });
 
-const getSigningKey = () => {
+// Uses LICENSE_PRIVATE_KEY when configured; otherwise creates an Ed25519 key
+// once and keeps it in Netlify Blobs so signing works without manual setup.
+const getSigningKey = async () => {
   const value = process.env.LICENSE_PRIVATE_KEY;
-  if (!value) throw new Error('LICENSE_PRIVATE_KEY is not configured');
-  return crypto.createPrivateKey(value.replace(/\\n/g, '\n'));
+  if (value) return crypto.createPrivateKey(value.replace(/\\n/g, '\n'));
+
+  const store = getStore('license-keys');
+  let pem = await store.get('private-key');
+  if (!pem) {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    await store.set('private-key', privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), { onlyIfNew: true });
+    pem = await store.get('private-key');
+    if (!pem) throw new Error('Could not store the generated signing key');
+  }
+  return crypto.createPrivateKey(pem);
 };
 
 const signaturePayload = (license: License) => ({
@@ -62,12 +73,12 @@ const signaturePayload = (license: License) => ({
   activatedDeviceHash: license.activatedDeviceHash,
 });
 
-const signLicense = (license: License) => {
+const signLicense = async (license: License) => {
   const payload = signaturePayload(license);
   return crypto.sign(
     null,
     Buffer.from(JSON.stringify(payload, Object.keys(payload).sort())),
-    getSigningKey(),
+    await getSigningKey(),
   ).toString('base64');
 };
 
@@ -77,11 +88,16 @@ const validText = (value: unknown, maxLength: number): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
 
 export const config = {
-  path: '/api/licenses/generate',
+  path: ['/api/licenses/generate', '/api/public-key'],
 };
 
 export default async (request: Request): Promise<Response> => {
   try {
+    if (new URL(request.url).pathname === '/api/public-key') {
+      const publicKey = crypto.createPublicKey(await getSigningKey()).export({ type: 'spki', format: 'pem' }).toString();
+      return new Response(publicKey, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+
     if (request.method !== 'POST') {
       return response({ error: 'Method not allowed.' }, 405);
     }
@@ -132,7 +148,7 @@ export default async (request: Request): Promise<Response> => {
       publicKeyId: 'server-ed25519',
     };
 
-    license.signature = signLicense(license);
+    license.signature = await signLicense(license);
     await getStore('license-records').setJSON(`license-${license.id}`, license, { onlyIfNew: true });
 
     return response({
