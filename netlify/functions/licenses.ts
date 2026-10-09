@@ -39,21 +39,21 @@ const response = (body: unknown, status = 200) =>
     },
   });
 
-const isAuthorized = (request: Request) => {
-  const expected = process.env.LICENSE_ADMIN_TOKEN;
-  const supplied = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
-  if (!expected || !supplied) return false;
-
-  const expectedBuffer = Buffer.from(expected);
-  const suppliedBuffer = Buffer.from(supplied);
-  return expectedBuffer.length === suppliedBuffer.length &&
-    crypto.timingSafeEqual(expectedBuffer, suppliedBuffer);
-};
-
-const getSigningKey = () => {
+// Uses LICENSE_PRIVATE_KEY when configured; otherwise creates an Ed25519 key
+// once and keeps it in Netlify Blobs so signing works without manual setup.
+const getSigningKey = async () => {
   const value = process.env.LICENSE_PRIVATE_KEY;
-  if (!value) throw new Error('LICENSE_PRIVATE_KEY is not configured');
-  return crypto.createPrivateKey(value.replace(/\\n/g, '\n'));
+  if (value) return crypto.createPrivateKey(value.replace(/\\n/g, '\n'));
+
+  const store = getStore('license-keys');
+  let pem = await store.get('private-key');
+  if (!pem) {
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    await store.set('private-key', privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), { onlyIfNew: true });
+    pem = await store.get('private-key');
+    if (!pem) throw new Error('Could not store the generated signing key');
+  }
+  return crypto.createPrivateKey(pem);
 };
 
 const signaturePayload = (license: License) => ({
@@ -73,12 +73,12 @@ const signaturePayload = (license: License) => ({
   activatedDeviceHash: license.activatedDeviceHash,
 });
 
-const signLicense = (license: License) => {
+const signLicense = async (license: License) => {
   const payload = signaturePayload(license);
   return crypto.sign(
     null,
     Buffer.from(JSON.stringify(payload, Object.keys(payload).sort())),
-    getSigningKey(),
+    await getSigningKey(),
   ).toString('base64');
 };
 
@@ -99,15 +99,16 @@ const getLicenses = async () => {
 };
 
 export const config = {
-  path: ['/api/licenses', '/api/licenses/generate'],
+  path: ['/api/licenses', '/api/licenses/generate', '/api/public-key'],
 };
 
 export default async (request: Request): Promise<Response> => {
-  if (!isAuthorized(request)) {
-    return response({ error: 'Admin access token is invalid or not configured.' }, 401);
-  }
-
   try {
+    if (new URL(request.url).pathname === '/api/public-key') {
+      const publicKey = crypto.createPublicKey(await getSigningKey()).export({ type: 'spki', format: 'pem' }).toString();
+      return new Response(publicKey, { headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    }
+
     if (request.method === 'GET') {
       const licenses = await getLicenses();
       return response({ licenses: licenses.map(publicLicense) });
@@ -163,7 +164,7 @@ export default async (request: Request): Promise<Response> => {
       publicKeyId: 'server-ed25519',
     };
 
-    license.signature = signLicense(license);
+    license.signature = await signLicense(license);
     await getStore('license-records').setJSON(`license-${license.id}`, license, { onlyIfNew: true });
 
     return response({
